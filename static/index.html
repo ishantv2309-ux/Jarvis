@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jarvis — macOS Voice Assistant</title>
+  <style>
+    :root {
+      --canvas: #FAFAFA;
+      --surface: #FFFFFF;
+      --surface-subtle: #F3F4F6;
+      --border: #E5E7EB;
+      --border-strong: #D1D5DB;
+      --text: #111827;
+      --muted: #6B7280;
+      --ink: #0F172A;
+      --accent: #2563EB;
+      --green: #16A34A;
+      --amber: #D97706;
+      --red: #DC2626;
+      --red-soft: rgba(220, 38, 38, 0.08);
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", system-ui, sans-serif;
+      --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 8px 28px rgba(15, 23, 42, 0.06);
+      --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--canvas);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* --- Frosted Top Minimal Bar --- */
+    .topbar-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      padding: 14px 24px 8px;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .topbar {
+      pointer-events: auto;
+      width: 100%;
+      max-width: 920px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.80);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-md);
+      flex-wrap: wrap;
+    }
+
+    .top-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-left: 8px;
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.2s, transform 0.2s;
+    }
+    .status-dot.listening { background: var(--green); }
+    .status-dot.paused { background: var(--muted); }
+    .status-dot.thinking, .status-dot.speaking { background: var(--accent); transform: scale(1.2); }
+
+    .followup-pill {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--muted);
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 999px;
+      display: none;
+    }
+    .followup-pill.active {
+      display: inline-flex;
+      color: #1D4ED8;
+      background: rgba(37, 99, 235, 0.08);
+      border-color: rgba(37, 99, 235, 0.22);
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      font-family: var(--sans);
+      font-size: 12.5px;
+      font-weight: 500;
+      border-radius: 999px;
+      padding: 7px 14px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.08s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    button:hover { background: var(--surface-subtle); border-color: var(--border-strong); }
+    button:active { transform: scale(0.98); }
+
+    button.btn-primary {
+      background: var(--ink);
+      color: #FFFFFF;
+      border-color: var(--ink);
+    }
+    button.btn-primary:hover { background: #1E293B; }
+
+    button.btn-terminate {
+      background: var(--red-soft);
+      color: var(--red);
+      border-color: rgba(220, 38, 38, 0.22);
+    }
+    button.btn-terminate:hover {
+      background: var(--red);
+      color: #FFFFFF;
+      border-color: var(--red);
+    }
+
+    /* --- Main Workspace --- */
+    main {
+      flex: 1;
+      width: 100%;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 12px 20px 175px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* --- Center Stage: Organic Siri/Apple Reactive Orb + Activation Overlay --- */
+    .hero-stage {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 18px 16px 8px;
+      text-align: center;
+      gap: 10px;
+    }
+
+    .orb-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      max-width: 420px;
+      min-height: 165px;
+    }
+
+    #orbCanvas {
+      width: 240px;
+      height: 150px;
+      display: block;
+    }
+
+    .activate-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(250, 250, 250, 0.74);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 18px;
+      z-index: 10;
+    }
+    .activate-overlay.hidden { display: none; }
+    .activate-cta {
+      padding: 12px 22px;
+      font-size: 13.5px;
+      font-weight: 600;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .live-caption {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text);
+      max-width: 580px;
+      min-height: 24px;
+      letter-spacing: -0.01em;
+    }
+    .live-subcaption {
+      font-size: 12.5px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+
+    .floating-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.78);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      margin-top: 2px;
+    }
+    .floating-controls button {
+      border: none;
+      background: transparent;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .floating-controls button:hover {
+      background: var(--surface-subtle);
+      color: var(--text);
+    }
+
+    /* --- Clean Activity Timeline --- */
+    .feed {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 16px;
+      box-shadow: var(--shadow-sm);
+      animation: slideIn 0.18s ease-out;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card.user-card {
+      background: #F8FAFC;
+      border-color: #E2E8F0;
+      align-self: flex-end;
+      max-width: 85%;
+    }
+    .card.jarvis-card { align-self: stretch; }
+    .card.notice-card {
+      background: var(--surface-subtle);
+      border-color: var(--border);
+      color: var(--muted);
+      padding: 9px 14px;
+      font-size: 12.5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .card-meta strong { color: var(--ink); font-weight: 600; }
+    .card-body { font-size: 14px; line-height: 1.55; color: var(--text); }
+
+    details.tool-timeline {
+      margin-top: 10px;
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+    }
+    details.tool-timeline summary {
+      cursor: pointer;
+      list-style: none;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .tool-steps {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .tool-step {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      border-radius: 9px;
+      background: var(--canvas);
+      border: 1px solid var(--border);
+      font-size: 12.5px;
+    }
+    .tool-step .step-left { display: flex; align-items: center; gap: 8px; }
+    .step-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      flex-shrink: 0;
+    }
+    .step-dot.error { background: var(--muted); }
+    .step-latency { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+    /* --- Pinned Bottom Floating Command Dock --- */
+    .dock-wrap {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: calc(100% - 32px);
+      max-width: 780px;
+      z-index: 35;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .quick-chips {
+      pointer-events: auto;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .chip {
+      font-size: 12px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+      box-shadow: var(--shadow-sm);
+    }
+    .chip:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface); }
+
+    .command-dock {
+      pointer-events: auto;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px 7px 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-lg);
+    }
+    .command-dock input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-family: var(--sans);
+      font-size: 14px;
+      color: var(--text);
+      outline: none;
+    }
+    .command-dock input::placeholder { color: #9CA3AF; }
+
+    /* Slide-over Settings Drawer */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.18);
+      z-index: 45;
+      display: none;
+      justify-content: flex-end;
+    }
+    .drawer-backdrop.open { display: flex; }
+
+    .drawer {
+      width: 100%;
+      max-width: 360px;
+      height: 100%;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: var(--shadow-lg);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow-y: auto;
+    }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; }
+    .modal-head h2 { font-size: 16px; font-weight: 600; }
+
+    .field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
+    .field label { color: var(--muted); font-weight: 500; }
+    .field input, .field select {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 8px 10px;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--canvas);
+      font-family: var(--sans);
+    }
+    .switch-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--canvas);
+    }
+    .perm-list { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--muted); }
+    .perm-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--canvas);
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Minimal Bar -->
+  <div class="topbar-wrap">
+    <header class="topbar">
+      <div class="top-left">
+        <div class="status-indicator">
+          <span id="statusDot" class="status-dot paused"></span>
+          <span id="statusText">Mic Off</span>
+        </div>
+        <span id="followUpPill" class="followup-pill">Follow-up Active</span>
+      </div>
+
+      <div class="top-actions">
+        <button id="openDrawerBtn" title="Bridge Settings">Settings</button>
+        <button id="toggleListenBtn" class="btn-primary">Enable Voice</button>
+        <button id="terminateBtn" class="btn-terminate">Terminate Session</button>
+      </div>
+    </header>
+  </div>
+
+  <!-- Center Stage & Clean Activity Feed -->
+  <main>
+    <section class="hero-stage">
+      <div class="orb-wrap">
+        <canvas id="orbCanvas" width="480" height="300"></canvas>
+        <div id="activateOverlay" class="activate-overlay">
+          <button id="activateJarvisBtn" class="btn-primary activate-cta">
+            Click to Enable Voice (or Press Space)
+          </button>
+        </div>
+      </div>
+      <div id="liveCaption" class="live-caption">Voice is off — microphone hardware released</div>
+      <div id="liveSubcaption" class="live-subcaption">Enable voice and say "Jarvis, ..." or type a command below</div>
+      <div class="floating-controls">
+        <button id="flushBtn">Send Speech Now</button>
+        <button id="clearChatBtn">Clear Feed</button>
+      </div>
+    </section>
+
+    <section id="feed" class="feed"></section>
+  </main>
+
+  <!-- Pinned Bottom Floating Command Dock -->
+  <div class="dock-wrap">
+    <div class="quick-chips">
+      <span class="chip" data-cmd="What apps are running?">Running apps</span>
+      <span class="chip" data-cmd="Open VS Code and play lo-fi beats on YouTube">VS Code + YouTube</span>
+      <span class="chip" data-cmd="Set volume to 45 percent">Volume 45%</span>
+      <span class="chip" data-cmd="Toggle dark mode">Dark Mode</span>
+      <span class="chip" data-cmd="What window is active?">Active window</span>
+    </div>
+    <form id="textForm" class="command-dock">
+      <input id="textInput" type="text" placeholder="Ask Jarvis anything or run a macOS workflow..." autocomplete="off" />
+      <button type="submit" class="btn-primary">Send</button>
+    </form>
+  </div>
+
+  <!-- Slide-Over Bridge Settings Drawer -->
+  <div id="drawerBackdrop" class="drawer-backdrop">
+    <aside class="drawer">
+      <div class="modal-head">
+        <h2>Bridge Settings</h2>
+        <button id="closeDrawerBtn">Done</button>
+      </div>
+
+      <div class="field">
+        <label for="providerInput">LLM Provider</label>
+        <select id="providerInput">
+          <option value="ollama">Ollama (Local)</option>
+          <option value="auto">Auto (Gemini → Ollama)</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="modelInput">Ollama Model</label>
+        <input id="modelInput" type="text" value="qwen2.5:3b" />
+      </div>
+
+      <div class="field">
+        <label for="ttsEngineInput">Voice Synthesis Engine</label>
+        <select id="ttsEngineInput">
+          <option value="edge-tts">edge-tts (British J.A.R.V.I.S. — RyanNeural)</option>
+          <option value="kokoro">Kokoro TTS (Offline British)</option>
+          <option value="say">macOS Say (Offline Daniel)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="voiceInput">Offline Fallback Voice (macOS)</label>
+        <input id="voiceInput" type="text" value="Daniel" />
+      </div>
+
+      <div class="switch-row">
+        <span>Shutdown bridge on tab close</span>
+        <input id="autoShutdownToggle" type="checkbox" />
+      </div>
+
+      <div class="switch-row">
+        <span>Confirm delete / shutdown</span>
+        <input id="confirmToggle" type="checkbox" checked />
+      </div>
+
+      <button id="saveSettingsBtn" class="btn-primary" style="justify-content: center;">Save Settings</button>
+
+      <div style="border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 12px; font-weight: 600; color: var(--muted);">
+          WhatsApp Contacts (contacts.json)
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <input id="contactNameInput" type="text" placeholder="Name (e.g. Mom)" style="flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 12px;" />
+          <input id="contactPhoneInput" type="text" placeholder="+9198XXXXXXXX" style="flex: 1.2; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 12px;" />
+          <button id="addContactBtn" style="padding: 6px 10px; font-size: 12px;">Add</button>
+        </div>
+        <div id="contactsList" class="perm-list"></div>
+      </div>
+
+      <div style="border-top: 1px solid var(--border); padding-top: 14px;">
+        <div style="font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 8px;">
+          macOS Permissions
+        </div>
+        <div id="permList" class="perm-list"></div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const followUpPill = document.getElementById("followUpPill");
+    const liveCaption = document.getElementById("liveCaption");
+    const liveSubcaption = document.getElementById("liveSubcaption");
+    const feed = document.getElementById("feed");
+    const toggleListenBtn = document.getElementById("toggleListenBtn");
+    const terminateBtn = document.getElementById("terminateBtn");
+    const flushBtn = document.getElementById("flushBtn");
+    const clearChatBtn = document.getElementById("clearChatBtn");
+    const textForm = document.getElementById("textForm");
+    const textInput = document.getElementById("textInput");
+    const activateOverlay = document.getElementById("activateOverlay");
+    const activateJarvisBtn = document.getElementById("activateJarvisBtn");
+
+    const drawerBackdrop = document.getElementById("drawerBackdrop");
+    const openDrawerBtn = document.getElementById("openDrawerBtn");
+    const closeDrawerBtn = document.getElementById("closeDrawerBtn");
+    const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+
+    const canvas = document.getElementById("orbCanvas");
+    const ctx = canvas.getContext("2d");
+
+    let ws = null;
+    let audioCtx = null;
+    let micStream = null;
+    let scriptNode = null;
+    let analyser = null;
+    let voiceEnabled = false;
+    let isSpeakingReply = false;
+    let currentAudioEl = null;
+    let currentState = "paused";
+    let followUpTimer = null;
+    let orbPhase = 0;
+
+    function isMicActive() {
+      return Boolean(voiceEnabled && micStream && audioCtx && audioCtx.state === "running");
+    }
+
+    function showFollowUpWindow(seconds = 10) {
+      if (followUpTimer) clearTimeout(followUpTimer);
+      followUpPill.textContent = `Follow-up Active (${seconds}s)`;
+      followUpPill.classList.add("active");
+      followUpTimer = setTimeout(() => {
+        followUpPill.classList.remove("active");
+      }, seconds * 1000);
+    }
+
+    function clearFollowUpWindow() {
+      if (followUpTimer) clearTimeout(followUpTimer);
+      followUpPill.classList.remove("active");
+    }
+
+    function setUIState(state) {
+      currentState = state;
+      statusDot.className = "status-dot " + state;
+      const labels = {
+        listening: "Listening",
+        paused: "Paused",
+        thinking: "Thinking",
+        speaking: "Speaking",
+      };
+      statusText.textContent = labels[state] || "Paused";
+
+      if (state === "listening") {
+        activateOverlay.classList.add("hidden");
+        toggleListenBtn.textContent = "Pause";
+        toggleListenBtn.classList.remove("btn-primary");
+        if (liveCaption.textContent.startsWith("Voice is off") || liveCaption.textContent.startsWith("Voice paused")) {
+          liveCaption.textContent = "Listening — speak naturally";
+        }
+        liveSubcaption.textContent = "Direct voice mode active";
+      } else if (state === "paused") {
+        activateOverlay.classList.remove("hidden");
+        toggleListenBtn.textContent = "Resume";
+        toggleListenBtn.classList.add("btn-primary");
+        clearFollowUpWindow();
+        liveCaption.textContent = "Voice paused — microphone hardware released";
+        liveSubcaption.textContent = 'Click Resume or press Space to enable voice';
+      } else if (state === "thinking") {
+        liveSubcaption.textContent = "Planning and executing macOS actions...";
+      } else if (state === "speaking") {
+        liveSubcaption.textContent = "Playing J.A.R.V.I.S. voice response";
+      }
+    }
+
+    function drawOrganicOrb() {
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      ctx.clearRect(0, 0, w, h);
+
+      let amp = 0.04;
+      if (analyser && isMicActive() && !isSpeakingReply) {
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteTimeDomainData(data);
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = Math.abs(data[i] - 128) / 128;
+          if (v > peak) peak = v;
+        }
+        amp = Math.min(1.0, peak * 2.4);
+      } else if (isSpeakingReply) {
+        amp = 0.35 + Math.abs(Math.sin(orbPhase * 3.1)) * 0.45;
+      } else if (currentState === "thinking") {
+        amp = 0.22;
+      }
+
+      orbPhase += currentState === "thinking" ? 0.055 : 0.025;
+      const baseR = 46 + amp * 18;
+
+      const halo = ctx.createRadialGradient(cx, cy, baseR * 0.25, cx, cy, baseR * 2.1);
+      halo.addColorStop(0, isMicActive() || isSpeakingReply ? "rgba(37, 99, 235, 0.16)" : "rgba(15, 23, 42, 0.06)");
+      halo.addColorStop(1, "rgba(250, 250, 250, 0)");
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(cx, cy, baseR * 2.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      const layers = [
+        { color: "rgba(37, 99, 235, 0.24)", speed: 1.0, freq: 3, ampMul: 9 },
+        { color: "rgba(14, 165, 233, 0.22)", speed: -1.3, freq: 4, ampMul: 7 },
+        { color: "rgba(15, 23, 42, 0.14)", speed: 0.7, freq: 2, ampMul: 6 },
+      ];
+
+      layers.forEach((layer, idx) => {
+        ctx.beginPath();
+        const pts = 72;
+        for (let i = 0; i <= pts; i++) {
+          const theta = (i / pts) * Math.PI * 2;
+          const wave =
+            Math.sin(theta * layer.freq + orbPhase * layer.speed + idx) *
+            (2.5 + amp * layer.ampMul);
+          const r = baseR + wave;
+          const x = cx + Math.cos(theta) * r;
+          const y = cy + Math.sin(theta) * r;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = layer.color;
+        ctx.fill();
+      });
+
+      const coreGrad = ctx.createRadialGradient(cx - 10, cy - 12, 4, cx, cy, baseR * 0.78);
+      if (currentState === "paused") {
+        coreGrad.addColorStop(0, "#E5E7EB");
+        coreGrad.addColorStop(1, "#9CA3AF");
+      } else {
+        coreGrad.addColorStop(0, "#93C5FD");
+        coreGrad.addColorStop(0.55, "#2563EB");
+        coreGrad.addColorStop(1, "#0F172A");
+      }
+      ctx.beginPath();
+      ctx.arc(cx, cy, baseR * 0.76, 0, Math.PI * 2);
+      ctx.fillStyle = coreGrad;
+      ctx.fill();
+
+      requestAnimationFrame(drawOrganicOrb);
+    }
+    requestAnimationFrame(drawOrganicOrb);
+
+    function addUserCard(text, metaRight = "") {
+      const card = document.createElement("div");
+      card.className = "card user-card";
+      card.innerHTML = `
+        <div class="card-meta">
+          <strong>You</strong>
+          <span>${metaRight}</span>
+        </div>
+        <div class="card-body"></div>
+      `;
+      card.querySelector(".card-body").textContent = text;
+      feed.prepend(card);
+    }
+
+    function addJarvisCard(text, steps = [], route = "") {
+      const card = document.createElement("div");
+      card.className = "card jarvis-card";
+      card.innerHTML = `
+        <div class="card-meta">
+          <strong>Jarvis</strong>
+          <span>${route}</span>
+        </div>
+        <div class="card-body"></div>
+      `;
+      card.querySelector(".card-body").textContent = text;
+
+      if (steps && steps.length > 0) {
+        const details = document.createElement("details");
+        details.className = "tool-timeline";
+        details.open = true;
+        details.innerHTML = `
+          <summary>
+            <span>${steps.length} macOS action${steps.length > 1 ? "s" : ""} executed</span>
+            <span>▾</span>
+          </summary>
+          <div class="tool-steps"></div>
+        `;
+        const container = details.querySelector(".tool-steps");
+        steps.forEach((s) => {
+          const row = document.createElement("div");
+          row.className = "tool-step";
+          row.innerHTML = `
+            <div class="step-left">
+              <span class="step-dot ${s.ok ? "" : "error"}"></span>
+              <span><strong>${s.tool_name}</strong> — <span class="step-msg"></span></span>
+            </div>
+            <span class="step-latency">${s.latency_ms} ms</span>
+          `;
+          row.querySelector(".step-msg").textContent = s.message;
+          container.appendChild(row);
+        });
+        card.appendChild(details);
+      }
+      feed.prepend(card);
+    }
+
+    function addSubtleNotice(leftText, rightText = "") {
+      const card = document.createElement("div");
+      card.className = "card notice-card";
+      card.innerHTML = `<span></span><span></span>`;
+      card.children[0].textContent = leftText;
+      card.children[1].textContent = rightText;
+      feed.prepend(card);
+    }
+
+    function float32ToInt16(buf) {
+      const out = new Int16Array(buf.length);
+      for (let i = 0; i < buf.length; i++) {
+        const s = Math.max(-1, Math.min(1, buf[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return out;
+    }
+
+    async function ensureWebSocketOpen() {
+      if (ws && ws.readyState === WebSocket.OPEN) return ws;
+      if (ws && ws.readyState === WebSocket.CONNECTING) {
+        await new Promise((resolve) => {
+          ws.addEventListener("open", resolve, { once: true });
+          ws.addEventListener("error", resolve, { once: true });
+        });
+        return ws;
+      }
+
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${proto}//${location.host}/ws/jarvis`);
+      attachWebSocketHandlers(ws);
+
+      await new Promise((resolve, reject) => {
+        ws.addEventListener("open", resolve, { once: true });
+        ws.addEventListener("error", () => reject(new Error("WebSocket connection failed")), { once: true });
+      });
+      return ws;
+    }
+
+    function stopMicrophoneAndSocket() {
+      voiceEnabled = false;
+      if (scriptNode) {
+        try { scriptNode.disconnect(); } catch (_) {}
+        scriptNode = null;
+      }
+      if (analyser) {
+        try { analyser.disconnect(); } catch (_) {}
+        analyser = null;
+      }
+      if (micStream) {
+        micStream.getTracks().forEach((t) => {
+          try { t.stop(); } catch (_) {}
+        });
+        micStream = null;
+      }
+      if (audioCtx) {
+        try { audioCtx.close(); } catch (_) {}
+        audioCtx = null;
+      }
+      if (ws) {
+        const sock = ws;
+        ws = null;
+        try {
+          if (sock.readyState === WebSocket.OPEN || sock.readyState === WebSocket.CONNECTING) {
+            sock.close(1000, "mic_paused_or_closed");
+          }
+        } catch (_) {}
+      }
+    }
+
+    async function enableVoiceSession() {
+      try {
+        await ensureWebSocketOpen();
+        if (!micStream) {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+        if (!audioCtx) {
+          try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+          } catch (_) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          }
+        }
+        if (audioCtx.state === "suspended") {
+          await audioCtx.resume();
+        }
+        if (audioCtx.state !== "running") {
+          throw new Error("AudioContext suspended");
+        }
+
+        if (!scriptNode) {
+          const source = audioCtx.createMediaStreamSource(micStream);
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 256;
+          scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
+          source.connect(analyser);
+          analyser.connect(scriptNode);
+          scriptNode.connect(audioCtx.destination);
+          scriptNode.onaudioprocess = (ev) => {
+            if (!voiceEnabled || isSpeakingReply || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const input = ev.inputBuffer.getChannelData(0);
+            ws.send(float32ToInt16(input).buffer);
+          };
+        }
+
+        voiceEnabled = true;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "set_sample_rate", sample_rate: audioCtx.sampleRate }));
+          ws.send(JSON.stringify({ type: "set_listening", active: true }));
+        }
+        setUIState("listening");
+      } catch (err) {
+        stopMicrophoneAndSocket();
+        setUIState("paused");
+        liveSubcaption.textContent = err.message || "Microphone access denied";
+      }
+    }
+
+    function pauseVoiceSession() {
+      stopMicrophoneAndSocket();
+      setUIState("paused");
+    }
+
+    async function playAudioB64(b64, mimeType = "audio/wav") {
+      if (!b64) return;
+      const audio = new Audio(`data:${mimeType};base64,${b64}`);
+      currentAudioEl = audio;
+      await new Promise((resolve) => {
+        audio.onended = resolve;
+        audio.onerror = resolve;
+        audio.play().catch(resolve);
+      });
+    }
+
+    async function playReplyVoice(audioB64, fallbackText, mimeType = "audio/mpeg", restoreState = null) {
+      isSpeakingReply = true;
+      setUIState("speaking");
+      if (currentAudioEl) {
+        currentAudioEl.pause();
+        currentAudioEl = null;
+      }
+      try {
+        if (audioB64) {
+          await playAudioB64(audioB64, mimeType || "audio/mpeg");
+        } else if ("speechSynthesis" in window && fallbackText) {
+          await new Promise((resolve) => {
+            const u = new SpeechSynthesisUtterance(fallbackText);
+            u.onend = resolve;
+            u.onerror = resolve;
+            window.speechSynthesis.speak(u);
+          });
+        }
+      } finally {
+        setTimeout(() => {
+          isSpeakingReply = false;
+          if (restoreState) {
+            setUIState(restoreState);
+          } else {
+            setUIState(isMicActive() ? "listening" : "paused");
+          }
+        }, 250);
+      }
+    }
+
+    function attachWebSocketHandlers(sock) {
+      sock.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "wake_triggered") {
+          showFollowUpWindow(msg.follow_up_seconds || 10);
+          if (msg.chime_b64) {
+            await playAudioB64(msg.chime_b64, "audio/wav");
+          }
+          liveCaption.textContent = msg.greeting;
+          addJarvisCard(msg.greeting, [], "wake");
+          await playReplyVoice(msg.audio_b64, msg.greeting, msg.mime_type || "audio/mpeg", "listening");
+        } else if (msg.type === "standby") {
+          await playReplyVoice(msg.audio_b64, msg.text, msg.mime_type || "audio/mpeg", "paused");
+          pauseVoiceSession();
+        } else if (msg.type === "ignored") {
+          liveSubcaption.textContent = `Ignored (say "Jarvis, ..."): "${msg.text}"`;
+        } else if (msg.type === "live_transcript") {
+          liveSubcaption.textContent = `Heard: "${msg.text}"`;
+        } else if (msg.type === "status") {
+          if (!isSpeakingReply && isMicActive()) {
+            setUIState(msg.state);
+          }
+        } else if (msg.type === "transcript") {
+          liveCaption.textContent = `"${msg.text}"`;
+          addUserCard(msg.text, `${msg.stt_ms} ms`);
+        } else if (msg.type === "step") {
+          if (msg.message) liveCaption.textContent = msg.message;
+        } else if (msg.type === "incoming_call") {
+          showFollowUpWindow(msg.follow_up_seconds || 10);
+          liveCaption.textContent = msg.text;
+          const card = document.createElement("div");
+          card.className = "card jarvis-card";
+          card.innerHTML = `
+            <div class="card-meta">
+              <strong>Incoming WhatsApp ${msg.call_type || "voice"} call</strong>
+              <span>${msg.caller || ""}</span>
+            </div>
+            <div class="card-body" style="margin-bottom: 10px;"></div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn-primary ans-btn">Answer Call</button>
+              <button class="btn-terminate dec-btn">Decline</button>
+            </div>
+          `;
+          card.querySelector(".card-body").textContent = msg.text;
+          card.querySelector(".ans-btn").addEventListener("click", () => sendTypedCommand("Answer the call"));
+          card.querySelector(".dec-btn").addEventListener("click", () => sendTypedCommand("Decline the call"));
+          feed.prepend(card);
+          await playReplyVoice(msg.audio_b64, msg.text, msg.mime_type || "audio/mpeg", isMicActive() ? "listening" : "paused");
+        } else if (msg.type === "reply") {
+          if (msg.follow_up_seconds && isMicActive() && !msg.pause_mic) {
+            showFollowUpWindow(msg.follow_up_seconds);
+          }
+          liveCaption.textContent = msg.text;
+          addJarvisCard(msg.text, msg.steps || [], msg.route || "");
+          await playReplyVoice(
+            msg.audio_b64,
+            msg.text,
+            msg.mime_type || "audio/mpeg",
+            msg.pause_mic ? "paused" : (isMicActive() ? "listening" : "paused")
+          );
+          if (msg.pause_mic) {
+            pauseVoiceSession();
+          }
+        } else if (msg.type === "terminated") {
+          stopMicrophoneAndSocket();
+          setUIState("paused");
+          liveCaption.textContent = "Session terminated. Microphone released.";
+        }
+      };
+
+      sock.onclose = () => {
+        if (voiceEnabled) {
+          stopMicrophoneAndSocket();
+          setUIState("paused");
+        }
+      };
+    }
+
+    async function loadStatus() {
+      const res = await fetch("/api/status");
+      const s = await res.json();
+      document.getElementById("providerInput").value = s.llm_provider;
+      document.getElementById("modelInput").value = s.ollama_model;
+      document.getElementById("ttsEngineInput").value = s.tts_engine || "edge-tts";
+      document.getElementById("voiceInput").value = s.tts_voice;
+      document.getElementById("autoShutdownToggle").checked = s.auto_shutdown_on_close;
+      document.getElementById("confirmToggle").checked = s.confirm_destructive_actions;
+
+      const p = s.permissions || {};
+      document.getElementById("permList").innerHTML = `
+        <div class="perm-item"><span>Accessibility</span><strong>${p.accessibility ? "Granted" : "Missing"}</strong></div>
+        <div class="perm-item"><span>Automation</span><strong>${p.automation ? "Granted" : "Missing"}</strong></div>
+        <div class="perm-item"><span>Full Disk Access</span><strong>${p.full_disk_access ? "Granted" : "Optional"}</strong></div>
+        <div class="perm-item"><span>Ollama (${s.ollama_model})</span><strong>${s.ollama_online ? "Online" : "Offline"}</strong></div>
+      `;
+    }
+
+    // Explicit user gesture controls to enable/pause voice
+    activateJarvisBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      enableVoiceSession();
+    });
+    document.addEventListener("keydown", (e) => {
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+      if (e.code === "Space" && tag !== "input" && tag !== "textarea" && tag !== "select") {
+        if (!isMicActive()) {
+          e.preventDefault();
+          enableVoiceSession();
+        }
+      }
+    });
+
+    toggleListenBtn.addEventListener("click", async () => {
+      if (isMicActive()) {
+        pauseVoiceSession();
+      } else {
+        await enableVoiceSession();
+      }
+    });
+
+    flushBtn.addEventListener("click", () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "flush_audio" }));
+      }
+    });
+
+    clearChatBtn.addEventListener("click", () => {
+      feed.innerHTML = "";
+      liveCaption.textContent = isMicActive()
+        ? "Listening — speak naturally"
+        : "Voice paused — microphone hardware released";
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "clear_history" }));
+      }
+    });
+
+    terminateBtn.addEventListener("click", async () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: "terminate" })); } catch (_) {}
+      }
+      stopMicrophoneAndSocket();
+      setUIState("paused");
+      await fetch("/api/shutdown", { method: "POST" }).catch(() => {});
+      liveCaption.textContent = "Session terminated. Microphone and bridge stopped.";
+      addSubtleNotice("Session terminated — microphone and macOS bridge stopped.");
+    });
+
+    async function sendTypedCommand(cmdText) {
+      if (!cmdText) return;
+      liveCaption.textContent = `"${cmdText}"`;
+      addUserCard(cmdText, "Typed");
+      const sock = await ensureWebSocketOpen();
+      sock.send(JSON.stringify({ type: "text_command", text: cmdText }));
+    }
+
+    textForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const val = textInput.value.trim();
+      textInput.value = "";
+      await sendTypedCommand(val);
+    });
+
+    document.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        sendTypedCommand(chip.dataset.cmd);
+      });
+    });
+
+    openDrawerBtn.addEventListener("click", () => drawerBackdrop.classList.add("open"));
+    closeDrawerBtn.addEventListener("click", () => drawerBackdrop.classList.remove("open"));
+    drawerBackdrop.addEventListener("click", (e) => {
+      if (e.target === drawerBackdrop) drawerBackdrop.classList.remove("open");
+    });
+
+    saveSettingsBtn.addEventListener("click", async () => {
+      const payload = {
+        llm_provider: document.getElementById("providerInput").value,
+        ollama_model: document.getElementById("modelInput").value.trim(),
+        tts_engine: document.getElementById("ttsEngineInput").value,
+        macos_voice: document.getElementById("voiceInput").value.trim(),
+        auto_shutdown_on_close: document.getElementById("autoShutdownToggle").checked,
+        confirm_destructive_actions: document.getElementById("confirmToggle").checked,
+      };
+      const r = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (r.ok) {
+        await loadStatus();
+        drawerBackdrop.classList.remove("open");
+        addSubtleNotice("Bridge settings updated.");
+      }
+    });
+
+    function cleanupOnUnload() {
+      stopMicrophoneAndSocket();
+      const body = JSON.stringify({ reason: "tab_closed", navigating: false });
+      navigator.sendBeacon("/api/beacon-close", new Blob([body], { type: "application/json" }));
+    }
+
+    window.addEventListener("beforeunload", cleanupOnUnload);
+    window.addEventListener("pagehide", cleanupOnUnload);
+
+    async function loadContacts() {
+      const res = await fetch("/api/contacts");
+      const data = await res.json();
+      const contacts = data.contacts || {};
+      const listEl = document.getElementById("contactsList");
+      const entries = Object.entries(contacts);
+      if (entries.length === 0) {
+        listEl.innerHTML = `<div class="perm-item"><span>No saved contacts yet (search fallback active)</span></div>`;
+        return;
+      }
+      listEl.innerHTML = "";
+      entries.forEach(([name, phone]) => {
+        const row = document.createElement("div");
+        row.className = "perm-item";
+        row.style.alignItems = "center";
+        row.innerHTML = `<span><strong></strong> · <span class="ph"></span></span><button style="padding: 2px 8px; font-size: 11px;">Remove</button>`;
+        row.querySelector("strong").textContent = name;
+        row.querySelector(".ph").textContent = phone;
+        row.querySelector("button").addEventListener("click", async () => {
+          await fetch(`/api/contacts/${encodeURIComponent(name)}`, { method: "DELETE" });
+          await loadContacts();
+        });
+        listEl.appendChild(row);
+      });
+    }
+
+    document.getElementById("addContactBtn").addEventListener("click", async () => {
+      const nameEl = document.getElementById("contactNameInput");
+      const phoneEl = document.getElementById("contactPhoneInput");
+      const name = nameEl.value.trim();
+      const phone = phoneEl.value.trim();
+      if (!name || !phone) return;
+      await fetch("/api/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, phone }),
+      });
+      nameEl.value = "";
+      phoneEl.value = "";
+      await loadContacts();
+    });
+
+    // Initialize in paused/mic-off state until user explicitly enables voice
+    setUIState("paused");
+    loadStatus();
+    loadContacts();
+  </script>
+</body>
+</html>

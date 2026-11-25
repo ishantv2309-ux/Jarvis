@@ -1,0 +1,78 @@
+# Project Jarvis Configuration
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_samples: 1280            # 80 ms @ 16 kHz (optimal for openWakeWord)
+  ring_buffer_seconds: 3.0       # Lightweight rolling buffer
+  pre_roll_seconds: 0.5          # Audio kept prior to speech onset
+  max_command_seconds: 12.0      # Hard cap for a single utterance
+  silence_timeout_seconds: 0.85  # End-of-speech pause detection
+  trailing_hangover_seconds: 0.40 # 400ms trailing hangover so words aren't clipped
+  min_speech_seconds: 0.35       # Minimum audio length for core desktop gate
+  min_continuous_speech_seconds: 1.20 # Require >=1.2s speech before browser verification
+  vad_aggressiveness: 2          # WebRTC VAD aggressiveness (0..3)
+  energy_threshold_dbfs: -42.0   # Base RMS gate (raised adaptively in noisy rooms)
+  input_device_index: null       # null = macOS default input device
+
+wake_word:
+  engine: "openwakeword"         # "openwakeword" | "pvporcupine"
+  model_name: "hey_jarvis"       # openWakeWord model identifier
+  threshold: 0.50                # Detection score threshold
+  patience_frames: 1             # Consecutive frames above threshold
+  cooldown_seconds: 1.5          # Minimum delay between wake triggers
+  porcupine_keyword: "jarvis"
+  porcupine_access_key_env: "PICOVOICE_ACCESS_KEY"
+
+biometrics:
+  engine: "speechbrain"          # "speechbrain" | "resemblyzer"
+  speechbrain_source: "speechbrain/spkrec-ecapa-voxceleb"
+  speechbrain_savedir: "config/models/spkrec-ecapa-voxceleb"
+  similarity_threshold: 0.60     # Calibrated SPEAKER_THRESHOLD for SpeechBrain ECAPA-TDNN
+  voiceprint_path: "owner_voiceprint.npy"
+  enrollment_phrases_count: 5    # 3-5 normalized voice samples
+  min_phrase_consistency: 0.60   # Reject outlier calibration recordings
+  strict_silence_on_reject: true # Never emit TTS or logs to audio on reject
+
+conversation:
+  follow_up_window_seconds: 10.0 # PRD FR-1: 10-second continuous window
+
+stt:
+  engine: "faster-whisper"
+  model_size: "small.en"
+  device: "cpu"
+  compute_type: "int8"
+  language: "en"
+  beam_size: 1
+  initial_prompt: "Jarvis, WhatsApp, YouTube, VS Code, Terminal, MacBook."
+
+tts:
+  engine: "edge-tts"             # "edge-tts" | "kokoro" | "say"
+  edge_voice: "en-GB-RyanNeural" # Articulated British J.A.R.V.I.S. cadence
+  edge_rate: "+4%"
+  edge_pitch: "-3Hz"
+  macos_voice: "Daniel"          # Offline British male fallback
+  macos_rate: 195
+  kokoro_voice: "bm_george"      # Offline Kokoro British male fallback
+  kokoro_lang: "b"
+
+llm:
+  provider: "ollama"             # "auto" | "gemini" | "ollama" | "local_rules"
+  gemini_model: "gemini-2.5-flash"
+  gemini_api_key_env: "GEMINI_API_KEY"
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "qwen2.5:3b"
+  ollama_timeout_seconds: 30.0
+  fast_path_enabled: true        # Deterministic sub-1.5s local tool routing
+
+safety:
+  confirm_destructive_actions: true
+  confirmation_phrase: "yes, execute"
+  confirmation_timeout_seconds: 12.0
+  kill_switch_hotkey: "cmd+shift+escape"
+  audit_log_path: "logs/jarvis_audit.log"
+
+daemon:
+  menu_bar_enabled: true
+  log_level: "INFO"
+  log_file: "logs/jarvis.log"

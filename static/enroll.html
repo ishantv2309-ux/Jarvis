@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jarvis — Voiceprint Calibration</title>
+  <style>
+    :root {
+      --canvas: #FAFAFA;
+      --surface: #FFFFFF;
+      --border: #E5E7EB;
+      --text: #111827;
+      --muted: #6B7280;
+      --accent: #2563EB;
+      --ink: #0F172A;
+      --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--sans);
+      background: var(--canvas);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 36px 20px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .shell {
+      width: 100%;
+      max-width: 720px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 26px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 18px; font-weight: 600; }
+    p { font-size: 13.5px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+    .phrase-card {
+      background: var(--canvas);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .phrase-card.done { border-color: rgba(22, 163, 74, 0.45); background: rgba(22, 163, 74, 0.03); }
+    .phrase-text { font-size: 13.5px; }
+    .phrase-meta { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+    button, a.btn {
+      font-family: var(--sans);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      padding: 7px 14px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    button:hover, a.btn:hover { background: #F3F4F6; }
+    button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #statusBanner {
+      font-size: 12.5px;
+      color: var(--muted);
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--canvas);
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="head">
+      <div>
+        <h1>Voiceprint Setup</h1>
+        <p>Record 3 to 5 normalized voice samples (4s each) to save <code>owner_voiceprint.npy</code>.</p>
+      </div>
+      <a href="/" id="backHome" class="btn">Back to Console</a>
+    </div>
+
+    <div id="phrasesList"></div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <span id="progressText" style="font-size: 12.5px; color: var(--muted);">0 of 3–5 samples recorded</span>
+      <button id="finalizeBtn" class="primary" disabled>Save Voiceprint</button>
+    </div>
+
+    <div id="statusBanner">Click "Record (4s)" on at least 3 phrases and speak naturally.</div>
+  </div>
+
+  <script>
+    const phrasesList = document.getElementById("phrasesList");
+    const finalizeBtn = document.getElementById("finalizeBtn");
+    const progressText = document.getElementById("progressText");
+    const statusBanner = document.getElementById("statusBanner");
+    const backHome = document.getElementById("backHome");
+    let recordedSet = new Set();
+    let isNavigating = false;
+
+    function float32ToInt16(buf) {
+      const out = new Int16Array(buf.length);
+      for (let i = 0; i < buf.length; i++) {
+        const s = Math.max(-1, Math.min(1, buf[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return out;
+    }
+
+    function int16ToBase64(int16Arr) {
+      const bytes = new Uint8Array(int16Arr.buffer);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(bin);
+    }
+
+    async function recordPhrase(index, btn, card, metaEl) {
+      btn.disabled = true;
+      btn.textContent = "Recording 4s...";
+      statusBanner.textContent = `Recording sample #${index + 1} — speak clearly...`;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+      });
+      let audioCtx;
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      } catch (_) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const source = audioCtx.createMediaStreamSource(stream);
+      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
+      const chunks = [];
+      processor.onaudioprocess = (ev) => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+
+      await new Promise((r) => setTimeout(r, 4000));
+      processor.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach((t) => t.stop());
+      const sampleRate = audioCtx.sampleRate;
+      await audioCtx.close();
+
+      const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+      const merged = new Float32Array(totalLen);
+      let offset = 0;
+      for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+
+      const res = await fetch("/api/enroll/phrase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          index,
+          pcm16_b64: int16ToBase64(float32ToInt16(merged)),
+          sample_rate: sampleRate,
+        }),
+      });
+      const data = await res.json();
+      btn.disabled = false;
+      if (!res.ok || !data.ok) {
+        btn.textContent = "Retry (4s)";
+        statusBanner.textContent = `Sample #${index + 1}: ${data.error || "failed"}`;
+        return;
+      }
+      recordedSet.add(index);
+      card.classList.add("done");
+      btn.textContent = "Re-record";
+      metaEl.textContent = `Captured ${data.duration_sec}s · RMS ${data.rms_dbfs} dBFS`;
+      progressText.textContent = `${recordedSet.size} of 3–5 samples recorded`;
+      finalizeBtn.disabled = recordedSet.size < 3;
+      statusBanner.textContent = `Sample #${index + 1} saved.`;
+    }
+
+    async function init() {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+      phrasesList.innerHTML = "";
+      (data.enroll_phrases || []).forEach((phrase, idx) => {
+        const card = document.createElement("div");
+        card.className = "phrase-card";
+        card.innerHTML = `
+          <div>
+            <div class="phrase-text">${idx + 1}. "${phrase}"</div>
+            <div class="phrase-meta">Not recorded</div>
+          </div>
+          <button>Record (4s)</button>
+        `;
+        const btn = card.querySelector("button");
+        const metaEl = card.querySelector(".phrase-meta");
+        btn.addEventListener("click", () => recordPhrase(idx, btn, card, metaEl));
+        phrasesList.appendChild(card);
+      });
+    }
+
+    finalizeBtn.addEventListener("click", async () => {
+      finalizeBtn.disabled = true;
+      statusBanner.textContent = "Computing master voiceprint...";
+      const res = await fetch("/api/enroll/finalize", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        finalizeBtn.disabled = false;
+        statusBanner.textContent = "Error: " + (data.error || "failed");
+        return;
+      }
+      statusBanner.textContent = `Saved (${data.phrase_count} samples, consistency ${data.mean_consistency}). Returning...`;
+      isNavigating = true;
+      setTimeout(() => { window.location.href = "/"; }, 1100);
+    });
+
+    backHome.addEventListener("click", () => { isNavigating = true; });
+    window.addEventListener("beforeunload", () => {
+      const body = JSON.stringify({ reason: "tab_closed", navigating: isNavigating });
+      navigator.sendBeacon("/api/beacon-close", new Blob([body], { type: "application/json" }));
+    });
+
+    init();
+  </script>
+</body>
+</html>

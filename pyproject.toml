@@ -1,0 +1,9 @@
+[project]
+name = "jarvis-mac"
+version = "0.1.0"
+description = "Project Jarvis: Voice-Only macOS System Assistant"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
